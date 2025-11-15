@@ -1,17 +1,40 @@
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Globe, Calendar } from "lucide-react";
+import { Loader2, Globe, Calendar, Search, Filter, X } from "lucide-react";
 import { toast } from "sonner";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { TechnologyFilter } from "@/components/TechnologyFilter";
 
 export const ScanHistory = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
+    from: undefined,
+    to: undefined,
+  });
+  const [selectedTechnologies, setSelectedTechnologies] = useState<string[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
     loadHistory();
   }, []);
+
+  // Get all unique technologies from scans for filter options
+  const allTechnologies = Array.from(
+    new Set(
+      scans.flatMap((scan) => {
+        if (!scan.tech_stack) return [];
+        return Object.values(scan.tech_stack).flatMap((techs: any) =>
+          Array.isArray(techs) ? techs.map((t: any) => t.name) : []
+        );
+      })
+    )
+  ).sort();
 
   const loadHistory = async () => {
     try {
@@ -19,7 +42,7 @@ export const ScanHistory = () => {
         .from('website_scans')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(200);
 
       if (error) throw error;
 
@@ -31,6 +54,52 @@ export const ScanHistory = () => {
       setIsLoading(false);
     }
   };
+
+  // Filter scans based on search criteria
+  const filteredScans = scans.filter((scan) => {
+    // Domain search filter
+    if (searchTerm && !scan.domain.toLowerCase().includes(searchTerm.toLowerCase()) && 
+        !scan.url.toLowerCase().includes(searchTerm.toLowerCase())) {
+      return false;
+    }
+
+    // Date range filter
+    if (dateRange.from && new Date(scan.created_at) < dateRange.from) {
+      return false;
+    }
+    if (dateRange.to) {
+      const toDate = new Date(dateRange.to);
+      toDate.setHours(23, 59, 59, 999); // Include the entire end date
+      if (new Date(scan.created_at) > toDate) {
+        return false;
+      }
+    }
+
+    // Technology filter
+    if (selectedTechnologies.length > 0) {
+      const scanTechnologies = scan.tech_stack
+        ? Object.values(scan.tech_stack).flatMap((techs: any) =>
+            Array.isArray(techs) ? techs.map((t: any) => t.name) : []
+          )
+        : [];
+      
+      const hasAllTechs = selectedTechnologies.every((tech) =>
+        scanTechnologies.includes(tech)
+      );
+      
+      if (!hasAllTechs) return false;
+    }
+
+    return true;
+  });
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setDateRange({ from: undefined, to: undefined });
+    setSelectedTechnologies([]);
+  };
+
+  const hasActiveFilters = searchTerm || dateRange.from || dateRange.to || selectedTechnologies.length > 0;
 
   if (isLoading) {
     return (
@@ -50,12 +119,115 @@ export const ScanHistory = () => {
     );
   }
 
+  if (filteredScans.length === 0 && hasActiveFilters) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold text-foreground">Scan History</h2>
+          <Button onClick={() => setShowFilters(!showFilters)} variant="outline" className="gap-2">
+            <Filter className="h-4 w-4" />
+            Filters {hasActiveFilters && `(${selectedTechnologies.length + (searchTerm ? 1 : 0) + (dateRange.from || dateRange.to ? 1 : 0)})`}
+          </Button>
+        </div>
+        
+        {showFilters && (
+          <Card className="p-6 space-y-4 bg-gradient-to-br from-card to-secondary/10 border-border/50">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Search Domain</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by domain..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-9 bg-background/50"
+                  />
+                </div>
+              </div>
+              
+              <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
+              
+              <TechnologyFilter
+                technologies={allTechnologies}
+                selectedTechnologies={selectedTechnologies}
+                setSelectedTechnologies={setSelectedTechnologies}
+              />
+            </div>
+            
+            {hasActiveFilters && (
+              <Button onClick={clearFilters} variant="ghost" size="sm" className="gap-2">
+                <X className="h-4 w-4" />
+                Clear all filters
+              </Button>
+            )}
+          </Card>
+        )}
+
+        <Card className="p-12 text-center border-border/50">
+          <Filter className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+          <h3 className="text-xl font-semibold mb-2 text-foreground">No matching scans</h3>
+          <p className="text-muted-foreground mb-4">Try adjusting your filters to see more results.</p>
+          <Button onClick={clearFilters} variant="outline" className="gap-2">
+            <X className="h-4 w-4" />
+            Clear filters
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-bold text-foreground mb-6">Scan History</h2>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">Scan History</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Showing {filteredScans.length} of {scans.length} scans
+          </p>
+        </div>
+        <Button onClick={() => setShowFilters(!showFilters)} variant="outline" className="gap-2">
+          <Filter className="h-4 w-4" />
+          Filters {hasActiveFilters && `(${selectedTechnologies.length + (searchTerm ? 1 : 0) + (dateRange.from || dateRange.to ? 1 : 0)})`}
+        </Button>
+      </div>
+
+      {showFilters && (
+        <Card className="p-6 space-y-4 bg-gradient-to-br from-card to-secondary/10 border-border/50">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Search Domain</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by domain..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9 bg-background/50"
+                />
+              </div>
+            </div>
+            
+            <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
+            
+            <TechnologyFilter
+              technologies={allTechnologies}
+              selectedTechnologies={selectedTechnologies}
+              setSelectedTechnologies={setSelectedTechnologies}
+            />
+          </div>
+          
+          {hasActiveFilters && (
+            <Button onClick={clearFilters} variant="ghost" size="sm" className="gap-2">
+              <X className="h-4 w-4" />
+              Clear all filters
+            </Button>
+          )}
+        </Card>
+      )}
       
       <div className="grid gap-4">
-        {scans.map((scan) => {
+        {filteredScans.map((scan) => {
           const techCount: number = scan.tech_stack 
             ? (Object.values(scan.tech_stack).reduce((sum: number, arr: any) => 
                 sum + (Array.isArray(arr) ? arr.length : 0), 0) as number)
